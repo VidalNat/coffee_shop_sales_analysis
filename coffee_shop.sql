@@ -21,30 +21,30 @@ print @col_list
 	select transaction_id,COUNT(*) as cnt 
 	from copy_coffee_shop_sales 
 	group by transaction_id
-	having COUNT(*) > 1;
+	having count(*) > 1;
 
 	-- Using dynamic sql for duplicates for all columns
 	-- Declare variables
-		DECLARE @col_name NVARCHAR(255);  -- Variable to hold the column name
-		DECLARE @sql NVARCHAR(MAX);       -- Variable to hold the dynamic SQL query
-		DECLARE @table_name NVARCHAR(255) = 'copy_coffee_shop_sales'; 
+		declare @col_name NVARCHAR(255);  -- Variable to hold the column name
+		declare @sql NVARCHAR(MAX);       -- Variable to hold the dynamic SQL query
+		declare @table_name NVARCHAR(255) = 'copy_coffee_shop_sales'; 
 
 		-- Declare a cursor to iterate through each column
-		DECLARE col_cursor CURSOR FOR
-		SELECT COLUMN_NAME
-		FROM INFORMATION_SCHEMA.COLUMNS
-		WHERE TABLE_NAME = @table_name;
+		declare col_cursor CURSOR FOR
+		select COLUMN_NAME
+		from INFORMATION_SCHEMA.COLUMNS
+		where TABLE_NAME = @table_name;
 
 		-- Open the cursor
-		OPEN col_cursor;
+		open col_cursor;
 
 		-- Fetch the first column name into @col_name
-		FETCH NEXT FROM col_cursor INTO @col_name;
+		fetch next from col_cursor into @col_name;
 
 		-- Loop through all columns
-		WHILE @@FETCH_STATUS = 0
-		BEGIN -- Build the dynamic SQL query for the current column
-			SET @sql = '
+		while @@FETCH_STATUS = 0
+		begin -- Build the dynamic SQL query for the current column
+			set @sql = '
 			SELECT ''' + @col_name + ''' AS column_name, COUNT(*) AS dup_cunt
 			FROM '+@table_name+'					
 			having count(*) > 1;
@@ -53,15 +53,15 @@ print @col_list
 			PRINT @sql;
 
 			-- Execute the dynamic SQL query
-			EXEC sp_executesql @sql;
+			exec sp_executesql @sql;
 
 			-- Fetch the next column name into @col_name
-			FETCH NEXT FROM col_cursor INTO @col_name;
-		END
+			fetch next from col_cursor into @col_name;
+		end
 
 		-- Close and deallocate the cursor
-		CLOSE col_cursor;
-		DEALLOCATE col_cursor;
+		close col_cursor;
+		deallocate col_cursor;
 
 -- Checking nulls
 		select count(*) as null_count
@@ -70,26 +70,26 @@ print @col_list
 
 -- Using dynamic sql for checking null for all columns
 	-- Declare variables
-		DECLARE @col_name NVARCHAR(255);  -- Variable to hold the column name
-		DECLARE @sql NVARCHAR(MAX);       -- Variable to hold the dynamic SQL query
-		DECLARE @table_name NVARCHAR(255) = 'copy_coffee_shop_sales'; 
+		declare @col_name NVARCHAR(255);  -- Variable to hold the column name
+		declare @sql NVARCHAR(MAX);       -- Variable to hold the dynamic SQL query
+		declare @table_name NVARCHAR(255) = 'copy_coffee_shop_sales'; 
 
 		-- Declare a cursor to iterate through each column
-		DECLARE col_cursor CURSOR FOR
-		SELECT COLUMN_NAME
-		FROM INFORMATION_SCHEMA.COLUMNS
-		WHERE TABLE_NAME = @table_name;
+		declare col_cursor cursor for
+		select COLUMN_NAME
+		from INFORMATION_SCHEMA.COLUMNS
+		where TABLE_NAME = @table_name;
 
 		-- Open the cursor
-		OPEN col_cursor;
+		open col_cursor;
 
 		-- Fetch the first column name into @col_name
-		FETCH NEXT FROM col_cursor INTO @col_name;
+		fetch next from  col_cursor into @col_name;
 
 		-- Loop through all columns
-		WHILE @@FETCH_STATUS = 0
-		BEGIN -- Build the dynamic SQL query for the current column
-			SET @sql = '
+		while @@FETCH_STATUS = 0
+		begin -- Build the dynamic SQL query for the current column
+			set @sql = '
 			SELECT ''' + @col_name + ''' AS column_name, COUNT(*) AS null_cnt 
 			FROM '+@table_name+'					
 			WHERE ' + @col_name + ' IS NULL;
@@ -98,15 +98,15 @@ print @col_list
 			PRINT @sql;
 
 			-- Execute the dynamic SQL query
-			EXEC sp_executesql @sql;
+			exec sp_executesql @sql;
 
 			-- Fetch the next column name into @col_name
-			FETCH NEXT FROM col_cursor INTO @col_name;
+			fetch next from col_cursor INTO @col_name;
 		END
 
 		-- Close and deallocate the cursor
-		CLOSE col_cursor;
-		DEALLOCATE col_cursor;
+		close col_cursor;
+		deallocate col_cursor;
 
 -- Removing Null rows of transaction_date
 delete from copy_coffee_shop_sales
