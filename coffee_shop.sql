@@ -1,334 +1,265 @@
-use  My_tasks
--- exec sp_rename 'coffe_shop_sales' ,'coffee_shop_sales';
+use coffee_shop;  -- Database instance
 
---making a copy of od original table to do our cleaning & analysis just in case
-select * 
-into copy_coffee_shop_sales
-from dbo.coffee_shop_sales
+-- 1. MOM SALES GROWTH % VIEW
+ 
+if object_id('vw_mom_sales_growth') is not null drop view vw_mom_sales_growth;
+go
 
--- verify the table creation
-select * from copy_coffee_shop_sales  order by transaction_id; 
-
---Print column names of the table for reference purpose
-declare @col_list nvarchar(max);
-select @col_list = STRING_AGG(COLUMN_NAME,', ')
-from INFORMATION_SCHEMA.COLUMNS
-where TABLE_NAME = 'copy_coffee_shop_sales';
-print @col_list
-
---Data Cleaning 
--- check from duplicates in transaction_id only because in the table only transaction_id is a unique identifier
-	select transaction_id,COUNT(*) as cnt 
-	from copy_coffee_shop_sales 
-	group by transaction_id
-	having count(*) > 1;
-
-	-- Using dynamic sql for duplicates for all columns
-	-- Declare variables
-		declare @col_name NVARCHAR(255);  -- Variable to hold the column name
-		declare @sql NVARCHAR(MAX);       -- Variable to hold the dynamic SQL query
-		declare @table_name NVARCHAR(255) = 'copy_coffee_shop_sales'; 
-
-		-- Declare a cursor to iterate through each column
-		declare col_cursor CURSOR FOR
-		select COLUMN_NAME
-		from INFORMATION_SCHEMA.COLUMNS
-		where TABLE_NAME = @table_name;
-
-		-- Open the cursor
-		open col_cursor;
-
-		-- Fetch the first column name into @col_name
-		fetch next from col_cursor into @col_name;
-
-		-- Loop through all columns
-		while @@FETCH_STATUS = 0
-		begin -- Build the dynamic SQL query for the current column
-			set @sql = '
-			SELECT ''' + @col_name + ''' AS column_name, COUNT(*) AS dup_cunt
-			FROM '+@table_name+'					
-			having count(*) > 1;
-			';
-			-- Print the dynamic SQL query to verify (optional)
-			PRINT @sql;
-
-			-- Execute the dynamic SQL query
-			exec sp_executesql @sql;
-
-			-- Fetch the next column name into @col_name
-			fetch next from col_cursor into @col_name;
-		end
-
-		-- Close and deallocate the cursor
-		close col_cursor;
-		deallocate col_cursor;
-
--- Checking nulls
-		select count(*) as null_count
-		from copy_coffee_shop_sales 
-		where transaction_date is null;
-
--- Using dynamic sql for checking null for all columns
-	-- Declare variables
-		declare @col_name NVARCHAR(255);  -- Variable to hold the column name
-		declare @sql NVARCHAR(MAX);       -- Variable to hold the dynamic SQL query
-		declare @table_name NVARCHAR(255) = 'copy_coffee_shop_sales'; 
-
-		-- Declare a cursor to iterate through each column
-		declare col_cursor cursor for
-		select COLUMN_NAME
-		from INFORMATION_SCHEMA.COLUMNS
-		where TABLE_NAME = @table_name;
-
-		-- Open the cursor
-		open col_cursor;
-
-		-- Fetch the first column name into @col_name
-		fetch next from  col_cursor into @col_name;
-
-		-- Loop through all columns
-		while @@FETCH_STATUS = 0
-		begin -- Build the dynamic SQL query for the current column
-			set @sql = '
-			SELECT ''' + @col_name + ''' AS column_name, COUNT(*) AS null_cnt 
-			FROM '+@table_name+'					
-			WHERE ' + @col_name + ' IS NULL;
-			';
-			-- Print the dynamic SQL query to verify (optional)
-			PRINT @sql;
-
-			-- Execute the dynamic SQL query
-			exec sp_executesql @sql;
-
-			-- Fetch the next column name into @col_name
-			fetch next from col_cursor INTO @col_name;
-		END
-
-		-- Close and deallocate the cursor
-		close col_cursor;
-		deallocate col_cursor;
-
--- Removing Null rows of transaction_date
-delete from copy_coffee_shop_sales
-where transaction_date is null;
-
-	/*	 -- incase we have any duplicates in transaction_id column
-	insert into copy_coffee_shop_sales (transaction_id,transaction_date,	transaction_time,	transaction_qty,	store_id,	store_location,	product_id,	unit_price,	product_category,	product_type,	product_detail)
-	values (26,'01/01/2023','08:33:08',1,5,'Lower Manhattan',	43,	3,	'Tea	Brewed', 'herbal tea',	'Lemon Grass Lg')
-
-	with CTE as (
-	select transaction_id, row_number() over (partition by transaction_date,	transaction_time,	transaction_qty,	store_id,	store_location,	product_id,	unit_price,	product_category,	product_type,	product_detail
-	order by transaction_id) as rn
-	from  copy_coffee_shop_sales)
-	delete from copy_coffee_shop_sales
-	where exists (select transaction_id,rn from CTE where rn > 1); */
-
--- Analysis part
--- total sales per month
-with sales_CTE as (
-	select format(transaction_date,'MMMM') as sale_month,month(transaction_date) as month_num, round(sum(transaction_qty*unit_price),2) as total_sales
-	from copy_coffee_shop_sales
-	group by format(transaction_date,'MMMM'),month(transaction_date)
-	)
-select sale_month, total_sales
-from sales_CTE
-order by month_num;
-
---month-on-month sales increase/decrease 
-with sales_CTE as (
-	select
-	year(transaction_date) as sale_yr,
-	format(transaction_date,'MMMM') as sale_month,
-	month(transaction_date) as month_num,
-	round(sum(transaction_qty*unit_price),2) as total_sales
-	from copy_coffee_shop_sales
-	group by format(transaction_date,'MMMM'),month(transaction_date),year(transaction_date)
-	)
-,order_CTE as (
-	select sale_yr, sale_month,month_num,total_sales,
-	lag(total_sales) over (order by month_num) as pre_month_sales
-	from sales_CTE)
-select sale_month,sale_yr, total_sales,
-	case when pre_month_sales is null  then 'No sales encountered'
-		 else concat(round((total_sales-pre_month_sales)/ pre_month_sales*100,2),'%')
-	end as sales_growth_percent
-	from order_CTE
-	order by sale_yr, month_num; -- incase we have data from mutiple year
-
---difference in sales between months
-with CTE as (
-	select 
-	year(transaction_date) as sale_yr,
-	format(transaction_date,'MMMM') as sale_month,
-	month(transaction_date) as month_num,
-	round(sum(transaction_qty*unit_price),2) as total_sales
-	from copy_coffee_shop_sales
-	group by format(transaction_date,'MMMM'),month(transaction_date),year(transaction_date)
+create view vw_mom_sales_growth
+as
+with cte1 as 
+(
+select 
+datename(year,transaction_date) as year, 
+datename(month,transaction_date) as month,
+month(transaction_date) as mnth_num,
+sum(sale_amount) as total_sale
+from dbo.coffee_shop_sales 
+group by datename(year,transaction_date), month(transaction_date), 
+datename(month,transaction_date)
 )
-select sale_month,sale_yr, total_sales,
-	   coalesce(total_sales - lag(total_sales) over (order by month_num),0) as sales_difference
-from CTE
-order by sale_yr, month_num; -- incase we have data from mutiple year
+select year,month,total_sale, coalesce(round(((total_sale - lag(total_sale) 
+    over (order by mnth_num))*1.0/lag(total_sale) 
+        over (order by mnth_num)) *100.0,2),0) as "MoM%" from cte1;
+go
+ 
+ 
+-- 2. MOM ORDER GROWTH % VIEW
 
---Total no. of orders per month
-with cte as (
-		select	sum(transaction_qty) as total_order,
-				format(transaction_date,'MMMM') as sale_month,
-				month(transaction_date) as month_num
-		from copy_coffee_shop_sales
-		group by format(transaction_date,'MMMM') , month(transaction_date))
-select sale_month, total_order
-from cte
-order by month_num; -- won't repeat order by year as we know we only have single year data
+if object_id('vw_mom_order_growth') is not null drop view vw_mom_order_growth;
+go
 
---month-on-month order increase/decrease 
-with order_CTE as (
-	select
-	format(transaction_date,'MMMM') as order_month,
-	month(transaction_date) as month_num,
-	sum(transaction_qty) as total_order
-	from copy_coffee_shop_sales
-	group by format(transaction_date,'MMMM'),month(transaction_date)
-	)
-,prev_order_CTE as (
-	select order_month, month_num,total_order,
-	lag(total_order) over (order by month_num) as pre_month_orders
-	from order_CTE)
-select order_month, total_order,pre_month_orders,
-	case when pre_month_orders is null  then 'No order encountered'
-		 else concat(round(cast((total_order-pre_month_orders) as decimal(10,2))/ pre_month_orders*100,2),'%')
-	end as order_growth_percent
-	from prev_order_CTE
-	order by month_num; -- incase we have data from mutiple year
-
---difference in order between months
-with CTE as (
-	select 
-	format(transaction_date,'MMMM') as order_month,
-	month(transaction_date) as month_num,
-	sum(transaction_qty) as total_order
-	from copy_coffee_shop_sales
-	group by format(transaction_date,'MMMM'),month(transaction_date)
+create view vw_mom_order_growth
+as
+with cte1 as 
+(
+select 
+datename(year,transaction_date) as "year", 
+datename(month,transaction_date) as "month",
+month(transaction_date) as mnth_num,
+sum(transaction_qty) as total_order
+from dbo.coffee_shop_sales 
+group by datename(year,transaction_date), month(transaction_date), 
+datename(month,transaction_date)
 )
-select order_month, total_order,
-	   coalesce(total_order - lag(total_order) over (order by month_num),0) as order_difference
-from CTE
-order by month_num; 
-
--- Checking on top-selling products
-with cte as (
-	select format(transaction_date,'MMMM') as sale_month, month(transaction_date) as month_num,
-	sum(transaction_qty) as total_qty_sold,
-	round(sum(transaction_qty*unit_price),2) as total_sales,
-	product_id,product_category,product_type
-	from copy_coffee_shop_sales
-	group  by  product_id,product_category,product_type,format(transaction_date,'MMMM'),month(transaction_date)
-	)
-select product_category,sum(total_qty_sold) as total_qty_sold,sum(total_sales) as total_sales,count(product_category)as total_orders
-from cte
-group  by product_category
-order by total_sales desc;
-
--- Checking on top-selling product & product type by each month based on quantity sold
-with sales_cte as (
-		select format(transaction_date,'MMMM') as sale_month, month(transaction_date) as month_num,
-		sum(transaction_qty) as total_qty_sold,
-		product_category,product_type,
-		rank() over(partition by format(transaction_date,'MMMM')
-		order by round(sum(transaction_qty*unit_price),2) desc) as category_rk
-		from copy_coffee_shop_sales
-		group by format(transaction_date,'MMMM'),month(transaction_date),product_category,product_type
-		)
-		,product_category_cte as (
-			select sale_month, month_num, product_category,max(total_qty_sold) as max_qty_sold
-			from sales_cte
-			where category_rk = 1
-			group by sale_month,month_num, product_category
-		)
-		,product_type_cte as (
-			select s.sale_month, s.month_num, s.product_category,s.product_type,s.total_qty_sold,
-			rank() over(partition by s.sale_month,s.product_category order by s.total_qty_sold desc) as type_rk
-			from sales_cte s
-			inner join 
-			product_category_cte pc on s.sale_month = pc.sale_month 
-			and s.product_category = pc.product_category
-			)
-select pt.sale_month as sale_month,
-pt.total_qty_sold as total_qty_sold,
-pt.product_category as product_category,
-pt.product_type as product_type
-from product_type_cte pt
-where pt.type_rk = 1
-group by pt.sale_month,pt.month_num,pt.total_qty_sold,pt.product_category,pt.product_type
-order by pt.month_num;
+select 
+    "year", 
+    "month",
+    total_order, 
+    coalesce(round(
+        ((total_order - lag(total_order) over (order by mnth_num))*1.0/lag(total_order) 
+        over (order by mnth_num)),3),
+        0
+    ) as "MoM%"
+from cte1;
+go
 
 
--- Checking on top-selling product & product type by each month based on revenue
-with sales_cte as (
-		select format(transaction_date,'MMMM') as sale_month, month(transaction_date) as month_num,
-		round(sum(transaction_qty*unit_price),2) as total_sales,
-		product_category,product_type,
-		rank() over(partition by format(transaction_date,'MMMM')
-		order by round(sum(transaction_qty*unit_price),2) desc) as category_rk
-		from copy_coffee_shop_sales
-		group by format(transaction_date,'MMMM'),month(transaction_date),product_category,product_type
-		)
-		,product_category_cte as (
-			select sale_month, month_num, product_category,max(total_sales) as max_sales
-			from sales_cte
-			where category_rk = 1
-			group by sale_month,month_num, product_category
-		)
-		,product_type_cte as (
-			select s.sale_month, s.month_num, s.product_category,s.product_type,s.total_sales,
-			rank() over(partition by s.sale_month,s.product_category order by s.total_sales desc) as type_rk
-			from sales_cte s
-			inner join 
-			product_category_cte pc on s.sale_month = pc.sale_month 
-			and s.product_category = pc.product_category
-			)
-select pt.sale_month as sale_month,
-pt.total_sales as total_sales,
-pt.product_category as product_category,
-pt.product_type as product_type
-from product_type_cte pt
-where pt.type_rk = 1
-group by pt.sale_month,pt.month_num,pt.total_sales,pt.product_category,pt.product_type
-order by pt.month_num;
+-- 3. TOTAL SALES & ORDERS BY PRODUCT CATEGORY VIEW
 
--- sales performance across different store locations
-	select store_location,round(sum(transaction_qty*unit_price),2) total_sales--,format(transaction_date,'MMMM')as sale_month,month(transaction_date) as month_num
-	from copy_coffee_shop_sales
-	group by store_location--,format(transaction_date,'MMMM'),month(transaction_date)
-	order by total_sales desc;
+if object_id('vw_category_performance') is not null drop view vw_category_performance;
+go
 
--- Top store locations each month based on total sales
-with cte as (select format(transaction_date,'MMMM')as sale_month,
-			month(transaction_date) as month_num,
-			store_location,
-			round(sum(transaction_qty*unit_price),2) as total_sales
-			from copy_coffee_shop_sales
-			group by format(transaction_date,'MMMM'),month(transaction_date),store_location)	
-,cte_1 as (
-			select sale_month,month_num,store_location,max(total_sales) as max_top_sales,
-			rank() over (partition by sale_month order by max(total_sales) desc) as rk
-			from cte 
-			group by month_num,sale_month,store_location)
-select sale_month,store_location,max(max_top_sales) as max_top_sales
-from cte_1
-where rk =1
-group by sale_month,month_num,store_location
-order by month_num;
+create view vw_category_performance
+as
+select 
+    product_category, 
+    sum(sale_amount) as total_sales, 
+    sum(transaction_qty) as total_orders 
+from 
+    dbo.coffee_shop_sales 
+group by 
+    product_category;
+go
 
--- Cheking variation in sales by day of the week and top day of the week based on sales
-select format(transaction_date,'dddd') as week_day,/*datepart(weekday,transaction_date) as week_num,*/round(sum(transaction_qty*unit_price),2) as total_sales
-from copy_coffee_shop_sales
-group by format(transaction_date,'dddd')--,datepart(weekday,transaction_date)
-order by total_sales desc;
 
--- Checking hourly variation as well as peak sales hours
-select datepart(hour,transaction_time) as day_hour,/*datepart(weekday,transaction_date) as week_num,*/round(sum(transaction_qty*unit_price),2) as total_sales
-from copy_coffee_shop_sales
-group by datepart(hour,transaction_time)--,datepart(weekday,transaction_date)
-order by total_sales desc;
-	
+-- 4. TOP PRODUCT TYPE PER MONTH (BY REVENUE) VIEW
+
+if object_id('vw_top_product_type_revenue') is not null drop view vw_top_product_type_revenue;
+go
+
+create view vw_top_product_type_revenue
+as
+with cte1 as (
+select 
+datename(month,transaction_date) as "month", 
+month(transaction_date) as mnth_num,
+product_type, 
+sum(sale_amount) as total_sales,
+row_number() over(partition by month(transaction_date) order by sum(sale_amount) desc) as rnk 
+from dbo.coffee_shop_sales 
+group by month(transaction_date), datename(month,transaction_date), product_type
+)
+select 
+    "month",
+    product_type, 
+    total_sales
+from cte1
+where rnk = 1;
+go
+
+
+-- 5. TOP PRODUCT CATEGORY PER MONTH (BY REVENUE) VIEW
+
+if object_id('vw_top_product_category_revenue') is not null 
+drop view vw_top_product_category_revenue;
+go
+
+create view vw_top_product_category_revenue
+as
+with cte1 as (
+select 
+datename(month,transaction_date) as "month", 
+month(transaction_date) as mnth_num,
+product_category, 
+sum(sale_amount) as total_sales,
+row_number() over(partition by month(transaction_date) order by sum(sale_amount) desc) as rnk 
+from dbo.coffee_shop_sales 
+group by month(transaction_date), datename(month,transaction_date), product_category
+)
+select 
+    "month",
+    product_category, 
+    total_sales
+from cte1
+where rnk = 1;
+go
+
+
+-- 6. TOP PRODUCT TYPE PER MONTH (BY QUANTITY) VIEW
+
+if object_id('vw_top_product_type_quantity') is not null drop view vw_top_product_type_quantity;
+go
+
+create view vw_top_product_type_quantity
+as
+with cte1 as (
+select 
+datename(month,transaction_date) as "month", 
+month(transaction_date) as mnth_num,
+product_category, -- Note: Original query used product_category for product type quantity
+sum(transaction_qty) as total_order,
+row_number() over(partition by month(transaction_date) order by sum(transaction_qty) desc) as rnk 
+from dbo.coffee_shop_sales 
+group by month(transaction_date), datename(month,transaction_date), product_category
+)
+select 
+    "month",
+    product_category,
+    total_order
+from cte1
+where rnk = 1;
+go
+
+
+-- 7. TOP STORE PER MONTH (BY SALES) VIEW
+
+if object_id('vw_top_store_sales') is not null drop view vw_top_store_sales;
+go
+
+create view vw_top_store_sales
+as
+with cte1 as (
+select 
+datename(month,transaction_date) as "month", 
+month(transaction_date) as mnth_num,
+store_location,
+sum(sale_amount) as total_sale,
+row_number() over(partition by month(transaction_date) order by sum(sale_amount) desc) as rnk 
+from dbo.coffee_shop_sales 
+group by month(transaction_date), datename(month,transaction_date), store_location
+)
+select 
+    "month",
+    store_location,
+    total_sale
+from cte1
+where rnk = 1;
+go
+
+
+-- 8. TOP STORE & IT'S TOP PRODUCT CATEGORY PER MONTH (BY SALES) VIEW
+
+if object_id('vw_top_store_category_sales') is not null drop view vw_top_store_category_sales;
+go
+
+create view vw_top_store_category_sales
+as
+with cte1 as (
+select 
+datename(month,transaction_date) as "month", 
+month(transaction_date) as mnth_num,
+store_location,
+product_category,
+sum(sale_amount) as total_sale,
+row_number() over(partition by month(transaction_date) 
+order by sum(sale_amount) desc) as rnk1,
+row_number() over(partition by month(transaction_date),
+store_location order by sum(sale_amount) desc) as rnk2 
+from dbo.coffee_shop_sales 
+group by month(transaction_date), datename(month,transaction_date), 
+store_location, product_category
+)
+select 
+    "month",
+    store_location,
+    product_category,
+    total_sale
+from cte1
+where rnk1 = 1;
+go
+
+
+-- 9. SALES BY DAY OF WEEK VIEW
+-- Can't use SET DATEFIRST 1 in a view. Use ISO formula fornat
+-- to guarantee Monday=1 (the intent of the original query).
+
+if object_id('vw_sales_by_day_of_week') is not null drop view vw_sales_by_day_of_week;
+go
+
+create view vw_sales_by_day_of_week
+as
+select 
+    ((datepart(weekday, transaction_date) + @@datefirst - 2) % 7) + 1 as week_dy_num,
+    datename(weekday,transaction_date) as week_day,
+    sum(sale_amount) as total_sale
+from dbo.coffee_shop_sales 
+group by 
+    ((datepart(weekday, transaction_date) + @@datefirst - 2) % 7) + 1,
+    datename(weekday,transaction_date);
+    /*
+        Formula Part	                                Purpose
+  DATEPART(WEEKDAY, date)	     Gets the day number based on the current session's start day (@@DATEFIRST).
+   + @@DATEFIRST - 2	         This is the offset correction. It mathematically shifts the week number to a 
+                                 position where Monday aligns to 0 just before the modulo operation.
+        % 7	                     The Modulo operation.This forces the week to cycle correctly from 0 to 6. 
+                                 When the number reaches 7 (like Monday in the example), it wraps back to 0.
+        + 1	                     The final alignment. This shifts the result from the 0-6 range into the user-friendly 1-7 range, where 1 is Monda
+*/
+go
+
+
+-- 10. PEAK HOURS (BY SALES) VIEW
+
+if object_id('vw_peak_hours_by_sales') is not null drop view vw_peak_hours_by_sales;
+go
+
+create view vw_peak_hours_by_sales
+as
+with cte as(
+select 
+datepart(hour,transaction_time) as hr,
+sum(sale_amount) as total_sale
+from dbo.coffee_shop_sales 
+group by datepart(hh,transaction_time)
+)
+select hr, 
+    case 
+		when hr > 12 then concat((hr-12),' PM')
+		when hr = 12 then concat(12,' PM')
+		when hr = 0 then concat(12, ' AM')
+		else concat(hr,' AM')
+		end as "12hr",
+    total_sale 
+from cte;
+go
